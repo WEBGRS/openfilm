@@ -15,7 +15,7 @@ import { useLanguage, useT, type Language } from '@/i18n';
 import { limitTitleWidth, TITLE_MAX_WIDTH } from '@/lib/title';
 import { api, type Project } from '@/api';
 import { folderCounts, folderPosters, folderTrail, parentOf, visibleProjects, type LibrarySort, type ProjectFolder } from '@/lib/project-folders';
-import { posterRetryDelay, posterTry } from '@/lib/projects-page';
+import { opensOnClick, posterRetryDelay, posterTry } from '@/lib/projects-page';
 import { ContextMenu } from './ContextMenu';
 import { ProjectMenu } from './ProjectMenu';
 import { ProjectCoverContext } from './ProjectCover';
@@ -123,6 +123,9 @@ export function ProjectsView({
   const counts = React.useMemo(() => folderCounts(projects, folders), [projects, folders]);
   const posters = React.useMemo(() => folderPosters(projects, folders), [projects, folders]);
 
+  /** A card's open: on a click, a key press or its menu, not on the second click of a double-click (lib/projects-page). */
+  const opening = (run: () => void) => (event?: { detail: number }) => { if (!event || opensOnClick(event)) run(); };
+
   async function newFolder() {
     const created = await onCreateFolder(t('projects.untitledFolder'), folderId);
     if (created) setRenamingFolderId(created.id);
@@ -134,7 +137,7 @@ export function ProjectsView({
       count: counts[folder.id] ?? 0,
       posters: posters[folder.id] ?? [],
       renaming: renamingFolderId === folder.id,
-      onOpen: () => setFolderId(folder.id),
+      onOpen: opening(() => setFolderId(folder.id)),
       onStartRename: () => setRenamingFolderId(folder.id),
       onCommitRename: (name: string) => {
         setRenamingFolderId(null);
@@ -217,7 +220,7 @@ export function ProjectsView({
       selected: selectedIds.has(project.id),
       renaming: renamingId === project.id,
       onToggleSelect: () => toggleSelected(project.id),
-      onOpen: () => onOpen(project),
+      onOpen: opening(() => onOpen(project)),
       onStartRename: () => { if (!selecting) setRenamingId(project.id); },
       onCommitRename: (name: string) => {
         setRenamingId((current) => (current === project.id ? null : current));
@@ -395,7 +398,7 @@ interface ItemProps {
   selected: boolean;
   renaming: boolean;
   onToggleSelect: () => void;
-  onOpen: () => void;
+  onOpen: (event?: { detail: number }) => void;
   onStartRename: () => void;
   onCommitRename: (name: string) => void;
   onCancelRename: () => void;
@@ -462,7 +465,7 @@ function ProjectCardTitle({
   stored: string;
   renaming: boolean;
   size: 'card' | 'list';
-  onOpen: () => void;
+  onOpen: (event?: { detail: number }) => void;
   onCommit: (title: string) => void;
   onCancel: () => void;
 }) {
@@ -870,7 +873,7 @@ interface FolderItemProps {
   /** its newest projects, up to four, with their covers when they have one */
   posters: { id: string; poster?: string }[];
   renaming: boolean;
-  onOpen: () => void;
+  onOpen: (event?: { detail: number }) => void;
   onStartRename: () => void;
   onCommitRename: (name: string) => void;
   onCancelRename: () => void;
