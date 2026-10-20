@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession, CLIENT_CAPABILITIES, agentDefaults, closeEverySession, planProblem, probeFolder, CODEX_UTF8_CMD, agentShell, allowOption, codexDeveloperInstructions, codexLaunchEnv, distinctOptions, errorCause, legacyOptions, powerShellScript, powerShellLine, terminalScript, checkAgentProgram, readAgentStatus, setChosenPaths, signInScript, turnError, signInError, codexTooOld, AGENTS, ownSignIn, codexServiceError, codexRefusal, codexNotice, explainFailure, stderrReason } from './agents.mjs';
+import { AgentSession, CLIENT_CAPABILITIES, agentDefaults, closeEverySession, planProblem, probeFolder, CODEX_UTF8_CMD, agentShell, allowOption, codexDeveloperInstructions, codexLaunchEnv, distinctOptions, errorCause, legacyOptions, powerShellScript, powerShellLine, powerShellWindowLaunch, terminalScript, checkAgentProgram, readAgentStatus, setChosenPaths, signInScript, turnError, signInError, codexTooOld, AGENTS, ownSignIn, codexServiceError, codexRefusal, codexNotice, explainFailure, stderrReason } from './agents.mjs';
 
 test('an agent that asks: yes for good where it offers that, else yes this once; nothing to say yes with is null', () => {
   const options = [
@@ -405,6 +405,33 @@ test('an installer runs as its maker wrote it: in Terminal on a Mac, in a PowerS
     'tell application "Terminal"\nactivate\ndo script "curl https://cursor.com/install -fsS | bash"\nend tell');
   const lines = powerShellLine('Cursor install', "irm 'https://cursor.com/install?win32=true' | iex").slice(1).split('\r\n');
   assert.deepEqual(lines.slice(0, 2), ["$Host.UI.RawUI.WindowTitle = 'Cursor install'", "irm 'https://cursor.com/install?win32=true' | iex"]);
+});
+
+test("a Windows sign-in or installer window is opened through cmd.exe's start, each path whole", () => {
+  const how = powerShellWindowLaunch('C:\\Users\\someone\\AppData\\Local\\Temp\\open film\\qwen.ps1',
+    { comSpec: 'C:\\WINDOWS\\system32\\cmd.exe', systemRoot: 'C:\\WINDOWS' });
+  assert.equal(how.cmd, 'C:\\WINDOWS\\system32\\cmd.exe');
+  assert.deepEqual(how.args, ['/d', '/s', '/c', '"start "" C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoExit '
+    + '-ExecutionPolicy Bypass -File "C:\\Users\\someone\\AppData\\Local\\Temp\\open film\\qwen.ps1""']);
+  assert.deepEqual(how.options, { windowsVerbatimArguments: true, windowsHide: true });
+});
+
+test('on Windows, the window opened for a sign-in or an installer runs its script', async () => {
+  if (process.platform !== 'win32') return;
+  const { spawn } = await import('node:child_process');
+  const { existsSync, mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'of-window '));
+  const mark = join(dir, 'ran.txt');
+  const file = join(dir, 'probe.ps1');
+  /* leaves a mark, then closes its own window */
+  writeFileSync(file, `\ufeffSet-Content -LiteralPath '${mark.replace(/'/g, "''")}' -Value ran\r\n[Environment]::Exit(0)\r\n`, 'utf8');
+  const how = powerShellWindowLaunch(file);
+  const child = spawn(how.cmd, how.args, { cwd: dir, detached: true, stdio: 'ignore', ...how.options });
+  child.unref();
+  for (let i = 0; i < 100 && !existsSync(mark); i += 1) await new Promise((r) => setTimeout(r, 100));
+  assert.ok(existsSync(mark), 'the script ran');
 });
 
 test('a program chosen that is an editor, or not Cursor\'s own agent, is refused without being started', async () => {
