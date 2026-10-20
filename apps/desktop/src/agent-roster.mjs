@@ -279,17 +279,22 @@ export function createRoster(deps) {
     changed();
   }
 
-  /** Looked at again every few seconds until `done` says so, or for as long as a sign-in is waited for. */
+  /**
+   * Looked at again every few seconds until `done` says so, or for as long as a sign-in is waited for. A wait started
+   * again for the same agent (Start again) takes over: the one before stops, and leaves the new one's state alone.
+   */
   async function waitFor(id, kind, done) {
-    live[kind][id] = true;
+    const mine = Symbol(kind);
+    live[kind][id] = mine;
     changed();
     const wait = deps.signInWait ?? SIGN_IN_WAIT;
     const until = Date.now() + wait.ms;
-    while (Date.now() < until && live[kind][id]) {
+    while (Date.now() < until && live[kind][id] === mine) {
       await new Promise((resolve) => setTimeout(resolve, wait.pollMs));
       await lookAgain(id);
       if (done(local?.find((a) => a.id === id))) break;
     }
+    if (live[kind][id] !== mine) return;
     delete live[kind][id];
     changed();
   }
@@ -309,7 +314,8 @@ export function createRoster(deps) {
         if (isOwn(id)) {
           deps.closeSessions(id);
           const [now] = (await refresh()).filter((a) => a.id === id);
-          if (now?.status !== 'sign-in') return { ok: true };
+          /* signed out; or signing in already, its window closed before it was done (Start again): opened again */
+          if (now?.status !== 'sign-in' && now?.status !== 'waiting') return { ok: true };
           const opened = await deps.openSignIn(id);
           if (!opened.ok) { live.errors[id] = opened.error ?? 'Terminal did not open.'; changed(); return { ok: false, error: live.errors[id] }; }
           void waitForSignIn(id);

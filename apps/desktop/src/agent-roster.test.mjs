@@ -275,6 +275,39 @@ test('a sign-in in Terminal is waited for asking only that agent, until it is si
   assert.equal(late.list().find((a) => a.id === 'cursor').status, 'sign-in');
 });
 
+test('Start again while a sign-in is waited for opens its sign-in again, and the wait starts over', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-roster-'));
+  const cursor = (signedIn) => ({ id: 'cursor', cli: { path: '/bin/cursor-agent' }, signedIn, install: null, setupRequired: null });
+  const opened = [];
+  let signedIn = false;
+  const r = roster(dir, undefined, {
+    localAgents: async () => [cursor(signedIn)], localAgent: async () => cursor(signedIn),
+    openSignIn: async (id) => { opened.push(id); return { ok: true }; },
+    signInWait: { ms: 300, pollMs: 10 },
+  });
+  const status = () => r.list().find((a) => a.id === 'cursor').status;
+  const after = (ms) => new Promise((done) => setTimeout(done, ms));
+  await r.connect('cursor');
+  await after(150);
+  assert.equal(status(), 'waiting');
+
+  /* its window was closed before the sign-in was done: Start again (connect) opens it again */
+  assert.deepEqual(await r.connect('cursor'), { ok: true });
+  assert.deepEqual(opened, ['cursor', 'cursor']);
+  await after(230);
+  assert.equal(status(), 'waiting', 'the first wait is over, the second is not');
+  await after(220);
+  assert.equal(status(), 'sign-in', 'the second wait is over too');
+
+  /* and a sign-in finished after Start again is seen */
+  await r.connect('cursor');
+  await after(30);
+  await r.connect('cursor');
+  signedIn = true;
+  await after(60);
+  assert.equal(status(), 'ready');
+});
+
 test("an agent found only as its maker's app: the app said, and its installer run in a terminal and waited for until it is there", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'of-roster-'));
   const missing = { id: 'cursor', cli: null, signedIn: null, install: 'https://cursor.com/cli', setupRequired: null, app: 'Cursor', installer: 'curl https://cursor.com/install -fsS | bash' };
