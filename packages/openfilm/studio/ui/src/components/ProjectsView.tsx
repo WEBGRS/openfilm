@@ -14,7 +14,7 @@ import { ExamplesSection } from './ProjectSources';
 import { useLanguage, useT, type Language } from '@/i18n';
 import { limitTitleWidth, TITLE_MAX_WIDTH } from '@/lib/title';
 import { api, type Project } from '@/api';
-import { folderCounts, folderPosters, folderTrail, parentOf, visibleProjects, type LibrarySort, type ProjectFolder } from '@/lib/project-folders';
+import { folderCounts, folderPosters, folderTrail, listStarts, parentOf, visibleProjects, type LibrarySort, type ProjectFolder } from '@/lib/project-folders';
 import { posterRetryDelay, posterTry } from '@/lib/projects-page';
 import { ContextMenu } from './ContextMenu';
 import { ProjectMenu } from './ProjectMenu';
@@ -55,8 +55,8 @@ export function ProjectsView({
   projects: LibraryProject[];
   /** A project is being created or opened; "New project" does not take a second click meanwhile. */
   creating?: boolean;
-  /** "New project": made at once, named as Studio names it (Untitled, Untitled 2…), and opened. */
-  onNewProject: () => void;
+  /** "New project": made at once in the folder looked at (null: the top level), named as Studio names it (Untitled, Untitled 2…), and opened. */
+  onNewProject: (folderId: string | null) => void;
   /** "Open folder…": a folder anywhere, opened as a project (the app's own dialog, else Studio's folder browser). */
   onOpenFolder: () => void;
   /** "Get from GitHub…": a repository or a folder in one, copied into the library and opened. */
@@ -233,7 +233,8 @@ export function ProjectsView({
     };
   }
 
-  const showNew = folderId === null && !query.trim();
+  const starts = listStarts({ folderId, query });
+  const showNew = starts.newProject;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -304,22 +305,22 @@ export function ProjectsView({
         <div className="w-full flex-1 px-6 pb-6">
           {visible.length === 0 && !showNew && !(showFolders && levelFolders.length > 0) ? (
             <div className="flex min-h-[42vh] items-center justify-center text-[14px] text-[var(--text-muted)]">
-              {folderId && !query.trim() ? t('projects.folderEmpty') : t('library.noMatches')}
+              {t('library.noMatches')}
             </div>
           ) : view === 'cards' ? (
             <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4">
-              {showNew ? <NewProjectCard creating={creating} onNewProject={onNewProject} onOpenFolder={onOpenFolder} onGetFromGitHub={onGetFromGitHub} /> : null}
+              {showNew ? <NewProjectCard creating={creating} onNewProject={() => onNewProject(folderId)} onOpenFolder={onOpenFolder} onGetFromGitHub={onGetFromGitHub} /> : null}
               {showFolders ? levelFolders.map((folder) => <FolderCard key={`folder:${folder.id}`} {...folderProps(folder)} />) : null}
               {visible.map((project) => <ProjectCard key={project.id} {...itemProps(project)} />)}
             </div>
           ) : (
             <div className="flex flex-col divide-y divide-[var(--border)]">
-              {showNew ? <NewProjectListRow creating={creating} onNewProject={onNewProject} onOpenFolder={onOpenFolder} onGetFromGitHub={onGetFromGitHub} /> : null}
+              {showNew ? <NewProjectListRow creating={creating} onNewProject={() => onNewProject(folderId)} onOpenFolder={onOpenFolder} onGetFromGitHub={onGetFromGitHub} /> : null}
               {showFolders ? levelFolders.map((folder) => <FolderListRow key={`folder:${folder.id}`} {...folderProps(folder)} />) : null}
               {visible.map((project) => <ProjectListRow key={project.id} {...itemProps(project)} />)}
             </div>
           )}
-          {showNew && onOpenExample ? (
+          {starts.examples && onOpenExample ? (
             <ExamplesSection examples={examples} collapsed={examplesCollapsed} onToggle={() => onToggleExamples?.()} onOpen={onOpenExample} view={view} />
           ) : null}
         </div>
