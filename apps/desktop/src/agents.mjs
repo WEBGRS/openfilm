@@ -33,7 +33,7 @@ import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
 import { PATH_SEP, childEnvironment, lastPathSource, loginShellEnvironment, loginShellVariables, shellSubset } from './environment.mjs';
-import { AGENT_PROGRAMS, HOME_BIN_CANDIDATES, chosenProgram, codexVersion, consoleProgram, desktopApp, detectAgentInstallation, installCommand, laterVersion, notTheAgent, searchReport } from './agent-installation.mjs';
+import { AGENT_PROGRAMS, HOME_BIN_CANDIDATES, chosenProgram, codexStoreCopies, codexVersion, consoleProgram, desktopApp, detectAgentInstallation, installCommand, laterVersion, notTheAgent, refusedToStart, searchReport } from './agent-installation.mjs';
 import { logSwitches } from './agent-logs.mjs';
 import { mergeConfig, sessionSkills } from './agent-skills.mjs';
 import { nodeBinary } from './node-runtime.mjs';
@@ -329,7 +329,10 @@ export async function diagnoseAgent(id, { appVersion = '' } = {}) {
     `Found: ${found ? `${found.path} (${found.source})` : '(not found)'}`,
     ...(windows ? [
       `npm global folder: ${slow.npmPrefix ?? '(unknown)'}`,
-      ...(id === 'codex' ? [`Codex in a Store app: ${slow.storeCodex ?? '(none)'}`] : []),
+      ...(id === 'codex' ? [
+        `Codex in a Store app: ${slow.storeCodex ? `${slow.storeCodex}${refusedToStart(slow.storeCodex) ? ' (Windows refuses to start it)' : ''}` : '(none)'}`,
+        `Codex the Store app keeps outside its package: ${codexStoreCopies().join(', ') || '(none)'}`,
+      ] : []),
       `In WSL: ${found ? '(not checked)' : wsl ?? '(no)'}`,
     ] : []),
     '',

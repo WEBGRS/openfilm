@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AGENT_INSTALLERS, chosenProgram, claudeAppCli, claudeVersion, cmdTarget, codexVersion, consoleProgram, desktopApp, detectAgentInstallation, findExecutable, installCommand, laterVersion, notTheAgent, opencodeVersion, searchReport, windowsBinDirs } from './agent-installation.mjs';
+import { AGENT_INSTALLERS, chosenProgram, claudeAppCli, claudeVersion, cmdTarget, codexStoreCopies, codexVersion, consoleProgram, desktopApp, detectAgentInstallation, findExecutable, installCommand, laterVersion, notTheAgent, opencodeVersion, refusedToStart, searchReport, windowsBinDirs } from './agent-installation.mjs';
 
 test("an npm .cmd shim (Windows) runs its package's script: that is what gets started", () => {
   const npm = mkdtempSync(join(tmpdir(), 'of-npm-'));
@@ -174,6 +175,67 @@ test('a program found some other way (a Store app) is used last', () => {
   const opts = { home, env: { PATH: '' }, pathDirs: [], applicationDirs: [] };
   assert.equal(detectAgentInstallation('codex', opts).cli, null);
   assert.deepEqual(detectAgentInstallation('codex', { ...opts, others: [store] }), { installed: true, cli: store, source: 'app', install: 'https://developers.openai.com/codex' });
+});
+
+test("the Codex Store app's copies outside its package: its bin folders and the app server's, newest first", () => {
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  const env = { LOCALAPPDATA: join(home, 'Local') };
+  assert.deepEqual(codexStoreCopies(home, { env }), [], 'the app never ran');
+  const older = put(join(home, 'Local', 'OpenAI', 'Codex', 'bin', 'd6efb6feb729707e', 'codex.exe'));
+  const server = put(join(home, '.codex', 'plugins', '.plugin-appserver', 'codex.exe'));
+  const newer = put(join(home, 'Local', 'OpenAI', 'Codex', 'bin', 'e78bad9887fa50cf', 'codex.exe'));
+  mkdirSync(join(home, 'Local', 'OpenAI', 'Codex', 'bin', 'empty'));
+  utimesSync(older, new Date(1000), new Date(1000));
+  utimesSync(server, new Date(2000), new Date(2000));
+  utimesSync(newer, new Date(3000), new Date(3000));
+  assert.deepEqual(codexStoreCopies(home, { env }), [newer, server, older]);
+  assert.deepEqual(codexStoreCopies(home, { env: { ...env, CODEX_HOME: join(home, 'elsewhere') } }), [newer, older], 'CODEX_HOME moves the app server');
+});
+
+test('a program Windows refuses to start (EPERM) is told once; one that fails some other way is not refused', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-refused-'));
+  const file = put(join(dir, 'codex.exe'));
+  let asked = 0;
+  const refuse = () => { asked += 1; throw Object.assign(new Error('spawnSync codex.exe EPERM'), { code: 'EPERM' }); };
+  assert.equal(refusedToStart(file, { start: refuse }), true);
+  assert.equal(refusedToStart(file, { start: refuse }), true);
+  assert.equal(asked, 1, 'asked once while the program is the same');
+  const slow = put(join(dir, 'slow.exe'));
+  assert.equal(refusedToStart(slow, { start: () => { throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }); } }), false);
+  assert.equal(refusedToStart(join(dir, 'gone.exe'), { start: refuse }), false, 'nothing there');
+});
+
+test('on Windows, a program the person may not execute is refused, as Codex inside WindowsApps is', () => {
+  if (process.platform !== 'win32') return;
+  const dir = mkdtempSync(join(tmpdir(), 'of-acl-'));
+  const denied = put(join(dir, 'denied.exe'));
+  const allowed = put(join(dir, 'allowed.exe'));
+  execFileSync('icacls', [denied, '/deny', `${process.env.USERNAME}:(X)`], { stdio: 'ignore' });
+  try {
+    assert.equal(refusedToStart(denied), true);
+    assert.equal(refusedToStart(allowed), false, 'not a program, yet not refused');
+  } finally {
+    execFileSync('icacls', [denied, '/remove:d', process.env.USERNAME], { stdio: 'ignore' });
+  }
+});
+
+test("Codex from the Store app on Windows: its copy outside the package, never one Windows refuses to start", () => {
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  const store = put(join(home, 'WindowsApps', 'OpenAI.Codex_26.1002.7124.0_x64__2p2nqsd0c76g0', 'app', 'resources', 'codex.exe'), '', 0o755);
+  const copy = put(join(home, 'AppData', 'Local', 'OpenAI', 'Codex', 'bin', 'e78bad9887fa50cf', 'codex.exe'));
+  const opts = { home, env: { PATH: '' }, pathDirs: [], applicationDirs: [], others: [store], win: true, codexVersionOf: () => null };
+  const refused = (file) => file === store;
+  assert.equal(detectAgentInstallation('codex', { ...opts, storeCopiesOf: () => [], refusedOf: refused }).cli, null, 'only the refused one: not found');
+  assert.equal(detectAgentInstallation('codex', { ...opts, storeCopiesOf: () => [], refusedOf: () => false }).cli, store, 'one Windows starts is used as before');
+  assert.deepEqual(detectAgentInstallation('codex', { ...opts, storeCopiesOf: () => [copy], refusedOf: refused }),
+    { installed: true, cli: copy, source: 'app', install: 'https://developers.openai.com/codex' });
+  assert.equal(detectAgentInstallation('codex', { ...opts, storeCopiesOf: () => [copy], refusedOf: () => false }).cli, copy, 'the copy first, the package last');
+  /* beside an older npm install: the copy, which says it is later */
+  const npm = join(home, 'npm');
+  const onPath = put(join(npm, 'codex.exe'));
+  const versions = { [onPath]: '0.162.1', [copy]: '0.163.0' };
+  assert.equal(detectAgentInstallation('codex', { ...opts, env: { PATH: npm }, storeCopiesOf: () => [copy], refusedOf: refused, codexVersionOf: (f) => versions[f] ?? null }).cli, copy);
+  assert.equal(detectAgentInstallation('codex', { ...opts, win: false, storeCopiesOf: () => [copy] }).cli, store, 'elsewhere no Store copies are looked for');
 });
 
 test('the report: every folder searched, each file with the name, what a shim runs, and what cannot be started', () => {

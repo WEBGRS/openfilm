@@ -358,6 +358,42 @@ function codexInApps(/** @type {string[]} */ applicationDirs) {
   return applicationDirs.flatMap((dir) => ['Codex.app', 'ChatGPT.app'].flatMap((app) => CODEX_IN_APP.map((p) => join(dir, app, p)))).filter(executableFile);
 }
 
+/**
+ * The copies of Codex that the Codex app from the Microsoft Store keeps outside its package (Windows), newest first:
+ * a program inside WindowsApps is refused to a caller without the package's identity on many computers, so the app
+ * runs its own Codex from %LOCALAPPDATA%\OpenAI\Codex\bin\<hash> and ~\.codex\plugins\.plugin-appserver.
+ */
+export function codexStoreCopies(home = homedir(), { env = process.env } = {}) {
+  const local = valueOf(env, 'LOCALAPPDATA') ?? join(home, 'AppData', 'Local');
+  const codexHome = valueOf(env, 'CODEX_HOME') ?? join(home, '.codex');
+  const bins = join(local, 'OpenAI', 'Codex', 'bin');
+  let hashed = [];
+  try { hashed = readdirSync(bins, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => join(bins, d.name, 'codex.exe')); } catch { /* the app never ran */ }
+  const mtime = (file) => { try { return statSync(file).mtimeMs; } catch { return 0; } };
+  return [...hashed, join(codexHome, 'plugins', '.plugin-appserver', 'codex.exe')]
+    .filter(existsFile)
+    .sort((a, b) => mtime(b) - mtime(a));
+}
+
+/** What Windows said when each program was started (`refusedToStart`), by program and its time. */
+const refusals = new Map();
+
+/**
+ * Whether Windows refuses to start a program (EPERM: access denied), asked once per program and time. Codex inside
+ * a Store app's package folder is refused this way on many computers: found, yet it never starts.
+ * @param {string} file @param {{ start?: (file: string) => void }} [o]
+ */
+export function refusedToStart(file, { start = (f) => execFileSync(f, ['--version'], { timeout: 2000, windowsHide: true, stdio: 'ignore' }) } = {}) {
+  let key;
+  try { key = `${file}\0${statSync(file).mtimeMs}`; } catch { return false; }
+  if (!refusals.has(key)) {
+    let refused = false;
+    try { start(file); } catch (e) { refused = /** @type {{ code?: string }} */ (e)?.code === 'EPERM' || /** @type {{ code?: string }} */ (e)?.code === 'EACCES'; }
+    refusals.set(key, refused);
+  }
+  return refusals.get(key) ?? false;
+}
+
 /* where OpenCode is inside OpenCode.app, its desktop app (macOS) */
 const OPENCODE_IN_APP = 'Contents/Resources/opencode-cli';
 
@@ -393,12 +429,14 @@ export function chosenProgram(path, { names = [], win = windows } = {}) {
  * The command line program, or the copy inside the maker's own desktop app (many people only ever installed the
  * app): Codex ships inside Codex.app and ChatGPT.app, OpenCode inside OpenCode.app; the Claude app keeps Claude Code
  * in its own folder, one folder per version, the newest used. `chosen`: the program the person chose, first.
- * `others`: programs found some other way (a Store app's own copy, agents.mjs), after the rest. `source` says which it
- * is: chosen · path · app. An editor's or a desktop app's own launcher is never taken for the agent (notTheAgent).
+ * `others`: programs found some other way (a Store app's own copy, agents.mjs), after the rest, and on Windows only
+ * one that Windows lets start; the Codex Store app's copies outside its package (codexStoreCopies) come before them.
+ * `source` says which it is: chosen · path · app. An editor's or a desktop app's own launcher is never taken for the
+ * agent (notTheAgent).
  */
 export function detectAgentInstallation(id, { home = homedir(), env = process.env, pathDirs = HOME_BIN_CANDIDATES(home),
   applicationDirs = ['/Applications', join(home, 'Applications')], chosen = null, others = [], win = windows, codexVersionOf = codexVersion,
-  opencodeVersionOf = opencodeVersion } = {}) {
+  opencodeVersionOf = opencodeVersion, storeCopiesOf = codexStoreCopies, refusedOf = refusedToStart } = {}) {
   const program = AGENT_PROGRAMS[id] ?? { names: [id] };
   const install = AGENT_DOWNLOADS[id] ?? null;
   const picked = chosen ? chosenProgram(chosen, { names: program.names, win }) : null;
@@ -415,8 +453,12 @@ export function detectAgentInstallation(id, { home = homedir(), env = process.en
     }
   }
   const usable = (file) => (win ? presentFile(file) : executableFile(file));
-  /* copies kept up to date by the maker's app (Codex: or a Store app), and how their version is told */
-  const copies = id === 'codex' ? [...codexInApps(applicationDirs), ...others.filter(usable)] : id === 'opencode' ? opencodeInApps(applicationDirs) : [];
+  /* one Windows refuses to start (inside a Store app's package) is no copy at all */
+  const startable = (file) => usable(file) && !(win && refusedOf(file));
+  /* copies kept up to date by the maker's app (Codex: or a Store app, its copies outside the package first), and how
+     their version is told */
+  const copies = id === 'codex' ? [...codexInApps(applicationDirs), ...(win ? storeCopiesOf(home) : []), ...others.filter(startable)]
+    : id === 'opencode' ? opencodeInApps(applicationDirs) : [];
   const versionOf = id === 'opencode' ? opencodeVersionOf : codexVersionOf;
   if (cli) {
     /* Claude Code both on the PATH (an npm install that is never updated, say) and in the Claude app, which keeps its
@@ -436,7 +478,7 @@ export function detectAgentInstallation(id, { home = homedir(), env = process.en
   }
   cli = copies[0] ?? null;
   if (!cli && id === 'claude') cli = claudeAppCli(home, { win });
-  if (!cli) cli = others.find(usable) ?? null;
+  if (!cli) cli = others.find(startable) ?? null;
   return { installed: Boolean(cli), cli, source: cli ? 'app' : null, install };
 }
 
