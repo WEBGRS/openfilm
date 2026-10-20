@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, normalizePath, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwind from '@tailwindcss/vite';
 import type { Plugin as PostcssPlugin } from 'postcss';
@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
  * Studio as its editor (studio-process.mjs `editorDir`). Studio's sources are the open-source ones as they are.
  */
 const STUDIO = join(dirname(createRequire(import.meta.url).resolve('openfilm/package.json')), 'studio/ui/src/');
-const CHAT = fileURLToPath(new URL('../chat/src/', import.meta.url));
+/* with forward slashes, as Vite names files on Windows too */
+const CHAT = normalizePath(fileURLToPath(new URL('../chat/src/', import.meta.url)));
 
 /** `@/…` is the importing file's own tree: Studio's files and the chat's each name their `src` so. */
 function twoTrees(): Plugin {
@@ -20,7 +21,7 @@ function twoTrees(): Plugin {
     enforce: 'pre',
     resolveId(source, importer, options) {
       if (!source.startsWith('@/') || !importer) return null;
-      const base = importer.startsWith(CHAT) ? CHAT : STUDIO;
+      const base = normalizePath(importer).startsWith(CHAT) ? CHAT : STUDIO;
       return this.resolve(join(base, source.slice(2)), importer, { ...options, skipSelf: true });
     },
   };
@@ -35,7 +36,7 @@ function twoTrees(): Plugin {
 const scopeChat: PostcssPlugin = {
   postcssPlugin: 'openfilm-scope-chat',
   Once(root, { result }) {
-    if (!result.opts.from?.startsWith(CHAT)) return;
+    if (!normalizePath(result.opts.from ?? '').startsWith(CHAT)) return;
     root.walkRules((rule) => {
       if (rule.parent?.type === 'atrule' && /keyframes$/i.test((rule.parent as { name: string }).name)) return;
       const selectors = new Set<string>();
