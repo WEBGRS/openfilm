@@ -29,3 +29,12 @@ export function posterRetryDelay(tried: number): number | null {
 export function posterTry(url: string, n: number): string {
   return n ? `${url}${url.includes('?') ? '&' : '?'}try=${n}` : url;
 }
+
+/**
+ * Whether a click on a card opens it: not the second click of a double-click (`detail` 2 or more). The first click
+ * opened something already, a folder say, and what stands under the pointer now was not aimed at. A key press (Enter,
+ * Space: `detail` 0) opens.
+ */
+export function opensOnClick(event: { detail: number }): boolean {
+  return event.detail < 2;
+}

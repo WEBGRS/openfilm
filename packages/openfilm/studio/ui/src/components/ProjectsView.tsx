@@ -15,7 +15,7 @@ import { useLanguage, useT, type Language } from '@/i18n';
 import { limitTitleWidth, TITLE_MAX_WIDTH } from '@/lib/title';
 import { api, type Project } from '@/api';
 import { folderCounts, folderPosters, folderTrail, listStarts, parentOf, visibleProjects, type LibrarySort, type ProjectFolder } from '@/lib/project-folders';
-import { posterRetryDelay, posterTry } from '@/lib/projects-page';
+import { opensOnClick, posterRetryDelay, posterTry } from '@/lib/projects-page';
 import { ContextMenu } from './ContextMenu';
 import { ProjectMenu } from './ProjectMenu';
 import { ProjectCoverContext } from './ProjectCover';
@@ -123,6 +123,9 @@ export function ProjectsView({
   const counts = React.useMemo(() => folderCounts(projects, folders), [projects, folders]);
   const posters = React.useMemo(() => folderPosters(projects, folders), [projects, folders]);
 
+  /** A card's open: on a click, a key press or its menu, not on the second click of a double-click (lib/projects-page). */
+  const opening = (run: () => void) => (event?: { detail: number }) => { if (!event || opensOnClick(event)) run(); };
+
   async function newFolder() {
     const created = await onCreateFolder(t('projects.untitledFolder'), folderId);
     if (created) setRenamingFolderId(created.id);
@@ -134,7 +137,7 @@ export function ProjectsView({
       count: counts[folder.id] ?? 0,
       posters: posters[folder.id] ?? [],
       renaming: renamingFolderId === folder.id,
-      onOpen: () => setFolderId(folder.id),
+      onOpen: opening(() => setFolderId(folder.id)),
       onStartRename: () => setRenamingFolderId(folder.id),
       onCommitRename: (name: string) => {
         setRenamingFolderId(null);
@@ -217,7 +220,7 @@ export function ProjectsView({
       selected: selectedIds.has(project.id),
       renaming: renamingId === project.id,
       onToggleSelect: () => toggleSelected(project.id),
-      onOpen: () => onOpen(project),
+      onOpen: opening(() => onOpen(project)),
       onStartRename: () => { if (!selecting) setRenamingId(project.id); },
       onCommitRename: (name: string) => {
         setRenamingId((current) => (current === project.id ? null : current));
@@ -309,13 +312,13 @@ export function ProjectsView({
             </div>
           ) : view === 'cards' ? (
             <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4">
-              {showNew ? <NewProjectCard creating={creating} onNewProject={() => onNewProject(folderId)} onOpenFolder={onOpenFolder} onGetFromGitHub={onGetFromGitHub} /> : null}
+              {showNew ? <NewProjectCard creating={creating} onNewProject={() => onNewProject(folderId)} {...(folderId === null ? { onOpenFolder, onGetFromGitHub } : {})} /> : null}
               {showFolders ? levelFolders.map((folder) => <FolderCard key={`folder:${folder.id}`} {...folderProps(folder)} />) : null}
               {visible.map((project) => <ProjectCard key={project.id} {...itemProps(project)} />)}
             </div>
           ) : (
             <div className="flex flex-col divide-y divide-[var(--border)]">
-              {showNew ? <NewProjectListRow creating={creating} onNewProject={() => onNewProject(folderId)} onOpenFolder={onOpenFolder} onGetFromGitHub={onGetFromGitHub} /> : null}
+              {showNew ? <NewProjectListRow creating={creating} onNewProject={() => onNewProject(folderId)} {...(folderId === null ? { onOpenFolder, onGetFromGitHub } : {})} /> : null}
               {showFolders ? levelFolders.map((folder) => <FolderListRow key={`folder:${folder.id}`} {...folderProps(folder)} />) : null}
               {visible.map((project) => <ProjectListRow key={project.id} {...itemProps(project)} />)}
             </div>
@@ -396,7 +399,7 @@ interface ItemProps {
   selected: boolean;
   renaming: boolean;
   onToggleSelect: () => void;
-  onOpen: () => void;
+  onOpen: (event?: { detail: number }) => void;
   onStartRename: () => void;
   onCommitRename: (name: string) => void;
   onCancelRename: () => void;
@@ -463,7 +466,7 @@ function ProjectCardTitle({
   stored: string;
   renaming: boolean;
   size: 'card' | 'list';
-  onOpen: () => void;
+  onOpen: (event?: { detail: number }) => void;
   onCommit: (title: string) => void;
   onCancel: () => void;
 }) {
@@ -545,8 +548,9 @@ function ProjectCardTitle({
 type NewProjectProps = {
   creating: boolean;
   onNewProject: () => void;
-  onOpenFolder: () => void;
-  onGetFromGitHub: () => void;
+  /* starting from a film that exists: at the top level only (what they make is not filed in a folder) */
+  onOpenFolder?: () => void;
+  onGetFromGitHub?: () => void;
 };
 
 /** The grid's first cell: start a new project, card-sized, so "new ones start here" reads at a glance. */
@@ -568,7 +572,7 @@ function NewProjectCard({ creating, onNewProject, onOpenFolder, onGetFromGitHub 
       </button>
       {/* where the other cards have their name: starting from a film that exists */}
       <div className="mt-2 flex">
-        <ImportMenu creating={creating} onOpenFolder={onOpenFolder} onGetFromGitHub={onGetFromGitHub} className="-ml-1.5 h-7 px-1.5 text-[12.5px]" />
+        {onOpenFolder && onGetFromGitHub ? <ImportMenu creating={creating} onOpenFolder={onOpenFolder} onGetFromGitHub={onGetFromGitHub} className="-ml-1.5 h-7 px-1.5 text-[12.5px]" /> : null}
       </div>
     </article>
   );
@@ -601,13 +605,13 @@ function NewProjectListRow({ creating, onNewProject, onOpenFolder, onGetFromGitH
           {t('projects.newProject')}
         </button>
       </div>
-      <ImportMenu creating={creating} onOpenFolder={onOpenFolder} onGetFromGitHub={onGetFromGitHub} className="h-8 px-2.5 text-[12.5px]" />
+      {onOpenFolder && onGetFromGitHub ? <ImportMenu creating={creating} onOpenFolder={onOpenFolder} onGetFromGitHub={onGetFromGitHub} className="h-8 px-2.5 text-[12.5px]" /> : null}
     </article>
   );
 }
 
 /** "Import from ⌄": the ways to start from a film that exists, a folder on this computer or a repository on GitHub. */
-function ImportMenu({ creating, onOpenFolder, onGetFromGitHub, className }: Omit<NewProjectProps, 'onNewProject'> & { className: string }) {
+function ImportMenu({ creating, onOpenFolder, onGetFromGitHub, className }: Required<Omit<NewProjectProps, 'onNewProject'>> & { className: string }) {
   const t = useT();
   const [anchor, setAnchor] = React.useState<{ x: number; y: number; top: number } | null>(null);
   const button = React.useRef<HTMLButtonElement>(null);
@@ -871,7 +875,7 @@ interface FolderItemProps {
   /** its newest projects, up to four, with their covers when they have one */
   posters: { id: string; poster?: string }[];
   renaming: boolean;
-  onOpen: () => void;
+  onOpen: (event?: { detail: number }) => void;
   onStartRename: () => void;
   onCommitRename: (name: string) => void;
   onCancelRename: () => void;
