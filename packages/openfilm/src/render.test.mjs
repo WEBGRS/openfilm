@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { getPriority, tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -234,6 +234,27 @@ document.body.style.background=${clearAt === null ? 'false' : `Math.abs(t-${clea
     assert.equal(started, 1, 'one browser for both pages');
   } finally {
     await pool.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--subtitles burns the project\'s subtitles in, to the same file, and a project with none is said so', { skip: !hasFfmpeg && 'no ffmpeg', timeout: 180_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-render-subs-'));
+  try {
+    mkdirSync(join(dir, 'assets'));
+    writeFileSync(join(dir, 'page.html'), '<!doctype html><body style="margin:0;background:#204080"><script>window.film = { duration: 2, width: 640, height: 360, frame() {} };</script>');
+    writeFileSync(join(dir, 'film.html'), '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=640, height=360"></head>'
+      + '<body><section><iframe src="page.html"></iframe></section><section><audio src="assets/vo.wav"></audio></section></body></html>');
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ac', '1', '-ar', '48000', join(dir, 'assets', 'vo.wav')]);
+    writeFileSync(join(dir, 'assets', 'vo.vtt'), 'WEBVTT\n\n00:00:00.200 --> 00:00:01.800\nBurned in\n');
+    const quiet = { workers: 1, silent: true, onProgress() {}, fps: 10 };
+    const plain = await render([dir], { ...quiet, out: join(dir, 'plain.mp4') });
+    const burned = await render([dir], { ...quiet, subtitles: true, out: join(dir, 'burned.mp4') });
+    assert.notEqual(statSync(burned.out).size, statSync(plain.out).size, 'the line is drawn into the picture');
+    assert.deepEqual(readdirSync(join(dir, '.film', 'cache', 'export')).filter((n) => n.startsWith('burn-')), [], 'the burn page is removed');
+    rmSync(join(dir, 'assets', 'vo.vtt'));
+    await assert.rejects(render([dir], { ...quiet, subtitles: true, out: join(dir, 'none.mp4') }), /no subtitles to burn in/);
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

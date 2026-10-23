@@ -9,7 +9,8 @@ import { broken, encoders, FRAMES_709, hardwareEncoder, hardwareOptions, prores7
 import { FilmPage, launch } from './host.mjs';
 import { exactRate, ffmpegRate } from './rate.mjs';
 import { browserCopies, filmVideos } from './seekable.mjs';
-import { ffmpeg, filmSound, fmt, kill, mix, open, outDir, parseTarget, shown, UsageError, write } from './shared.mjs';
+import { ffmpeg, filmSound, fmt, kill, locate, mix, open, outDir, parseTarget, shown, UsageError, write } from './shared.mjs';
+import { burnFilm } from './burn.mjs';
 
 const BT709 = ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv'];
 const TAG_709 = ['-bsf:v', 'h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1:video_full_range_flag=0'];
@@ -77,6 +78,27 @@ export async function render(args, opts = {}) {
   const started = Date.now();
   const { film: target, at, range } = parseTarget(args);
   if (at != null) throw new UsageError(`render takes a range (for example ${at}-${at + 2}), not one time; for one frame use openfilm look ${at}`);
+  /* --subtitles: the film drawn around by a page that burns its subtitles in (the export's own, burn.mjs), rendered in
+     its place, from the project's folder, to the same file */
+  if (opts.subtitles && !opts.nameAs) {
+    const loc = locate(target);
+    const { subtitlesForExport } = await import('../studio/server/captions.mjs');
+    const { filmSubtitleShown } = await import('../studio/server/film-subtitle.mjs');
+    const { cues, style } = await subtitlesForExport(loc.root);
+    if (!filmSubtitleShown(cues, style).some((c) => c.durMs > 0 && c.text.trim())) throw new UsageError('--subtitles: the film has no subtitles to burn in');
+    const probeOf = await open(target);
+    const stage = { w: probeOf.film.meta.width, h: probeOf.film.meta.height };
+    await probeOf.close();
+    const burn = await burnFilm(loc.root, stage, 'native', 'contain', cues, style, !!opts.alpha);
+    try {
+      const out = resolve(opts.out ?? (range
+        ? join(outDir(loc.dir, 'render'), `${loc.name}-${range[0]}-${range[1]}${opts.alpha ? '.webm' : '.mp4'}`)
+        : join(loc.dir, `${loc.name}${opts.alpha ? '.webm' : '.mp4'}`)));
+      return await render([burn.dir, ...(range ? [`${range[0]}-${range[1]}`] : [])], { ...opts, subtitles: false, root: loc.root, out, nameAs: { dir: loc.dir, name: loc.name } });
+    } finally {
+      await burn.remove();
+    }
+  }
   /* `root`: the folder to serve (a host rendering an edit kept elsewhere in a project serves the project). The videos
      the pages ask for are noted, and served as their fast-seeking copies once there are some (seekable.mjs). */
   const videos = new Set();
@@ -98,7 +120,10 @@ export async function render(args, opts = {}) {
     await pool?.give(lent, { retire: true });
     throw e;
   }
-  const { entry, dir, name, site, browser, isFilm, root } = probe;
+  const { entry, site, browser, isFilm, root } = probe;
+  /* a burned-in render names the project it is for, not the page drawn for it */
+  const dir = opts.nameAs?.dir ?? probe.dir;
+  const name = opts.nameAs?.name ?? probe.name;
   const meta = probe.film.meta;
   await probe.film.close();
 
