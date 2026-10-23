@@ -337,7 +337,7 @@ export function AgentsSection() {
             ) : null}
             {agent.status === 'waiting' ? (
               <p className="text-[14.5px] leading-relaxed text-[var(--text-muted)]">
-                {t('settings.agents.waitingHint')}{' '}
+                {t(agent.id === 'minimax' ? 'settings.agents.waitingHintMinimax' : agent.id === 'codebuddy' ? 'settings.agents.waitingHintCodebuddy' : 'settings.agents.waitingHint')}{' '}
                 <button type="button" onClick={() => act(agent.id, () => host.connect(agent.id))} className="underline underline-offset-2 hover:text-[var(--text)]">{t('settings.agents.startAgain')}</button>
               </p>
             ) : null}
