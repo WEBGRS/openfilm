@@ -1,6 +1,6 @@
 // film render: the deliverable. Frames are rendered in parallel page instances, averaged
 // over the shutter for motion blur, encoded with tagged BT.709 color, and muxed with the mix of the film's sounds.
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { availableParallelism, freemem, totalmem } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
@@ -76,6 +76,7 @@ export function outOfMemory(e, workers) {
 export async function render(args, opts = {}) {
   const started = Date.now();
   const { film: target, at, range } = parseTarget(args);
+  if (opts.loudness != null && !(Number(opts.loudness) >= -70 && Number(opts.loudness) <= -5)) throw new UsageError('--loudness is a target from -70 to -5 LUFS, e.g. --loudness=-14 for online video');
   if (at != null) throw new UsageError(`render takes a range (for example ${at}-${at + 2}), not one time; for one frame use openfilm look ${at}`);
   /* `root`: the folder to serve (a host rendering an edit kept elsewhere in a project serves the project). The videos
      the pages ask for are noted, and served as their fast-seeking copies once there are some (seekable.mjs). */
@@ -275,6 +276,7 @@ export async function render(args, opts = {}) {
       const video = parts.length > 1 ? ['-f', 'concat', '-safe', '0', '-i', join(work, 'list.txt')] : ['-i', parts[0].file];
       await ffmpeg([...video, ...(sound ? ['-i', sound, '-map', '0:v', '-map', '1:a'] : []), '-c', 'copy', ...after, out]).done;
     }
+    if (opts.loudness != null) await toLoudness(out, Number(opts.loudness), opts.signal);
     failed = false;
   } finally {
     /* Windows lets go of a file a moment after ffmpeg exits, and later still after one that failed: a folder it
@@ -298,6 +300,42 @@ export async function render(args, opts = {}) {
       ...problems.map((p) => `✗ ${p.kind === 'request' ? 'request' : 'page'}: ${p.message}`),
     ],
   };
+}
+
+/**
+ * The sound of a finished file brought to `target` loudness (LUFS, EBU R128) with true peaks held at −1.5 dBTP: two
+ * passes, measured then set, so the level is the film's own and not a guess. The picture is copied, not encoded again;
+ * a file with no sound is left as it is.
+ * @param {string} file @param {number} target @param {AbortSignal} [signal]
+ */
+async function toLoudness(file, target, signal) {
+  const audio = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', file], { encoding: 'utf8', windowsHide: true }).trim();
+  if (!audio) return;
+  const run = (args) => new Promise((ok, fail) => {
+    const p = spawn('ffmpeg', ['-hide_banner', '-nostdin', '-loglevel', 'info', ...args], { windowsHide: true });
+    let err = '';
+    p.stderr.on('data', (d) => { err += d; });
+    const kill = () => p.kill();
+    signal?.addEventListener('abort', kill, { once: true });
+    p.on('error', fail);
+    p.on('close', (code) => { signal?.removeEventListener('abort', kill); return code === 0 ? ok(err) : fail(new Error(`ffmpeg: ${err.trim().split('\n').at(-1) ?? `exit ${code}`}`)); });
+  });
+  const norm = `I=${target}:TP=-1.5:LRA=11`;
+  const log = await run(['-i', file, '-map', '0:a:0', '-af', `loudnorm=${norm}:print_format=json`, '-f', 'null', '-']);
+  const json = [...log.matchAll(/\{[^{}]*\}/g)].at(-1)?.[0];
+  if (!json) throw new Error('the sound could not be measured for --loudness');
+  const m = JSON.parse(json);
+  const ext = extname(file);
+  const codec = ext === '.webm' ? ['-c:a', 'libopus'] : ext === '.mov' ? ['-c:a', 'pcm_s24le'] : ['-c:a', 'aac', '-b:a', '192k'];
+  const tmp = `${file}.loud${ext}`;
+  try {
+    await run(['-i', file, '-map', '0', '-map_metadata', '0', '-c:v', 'copy', ...codec, '-af',
+      `loudnorm=${norm}:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true`,
+      ...(ext === '.mp4' ? ['-movflags', '+faststart'] : []), tmp]);
+    renameSync(tmp, file);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
 }
 
 /**

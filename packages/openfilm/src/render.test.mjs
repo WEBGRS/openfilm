@@ -237,3 +237,23 @@ document.body.style.background=${clearAt === null ? 'false' : `Math.abs(t-${clea
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('--loudness brings the sound to the target, the picture kept; a target out of range is refused', { skip: !hasFfmpeg && 'no ffmpeg', timeout: 180_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-render-loud-'));
+  try {
+    mkdirSync(join(dir, 'assets'));
+    writeFileSync(join(dir, 'page.html'), '<!doctype html><body style="margin:0;background:#204080"><script>window.film = { duration: 2, width: 320, height: 180, frame() {} };</script>');
+    writeFileSync(join(dir, 'film.html'), '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=320, height=180"></head>'
+      + '<body><section><iframe src="page.html"></iframe></section><section><audio src="assets/vo.wav"></audio></section></body></html>');
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ac', '1', '-ar', '48000', join(dir, 'assets', 'vo.wav')]);
+    const quiet = { workers: 1, silent: true, onProgress() {}, fps: 10 };
+    const loud = await render([dir], { ...quiet, silent: false, loudness: -23, out: join(dir, 'loud.mp4') });
+    const measured = spawnSync('ffmpeg', ['-hide_banner', '-nostdin', '-i', loud.out, '-map', '0:a:0', '-af', 'loudnorm=I=-23:TP=-1.5:LRA=11:print_format=json', '-f', 'null', '-'], { encoding: 'utf8' });
+    const json = [...measured.stderr.matchAll(/\{[^{}]*\}/g)].at(-1)?.[0];
+    assert.ok(json, 'the result is measured');
+    assert.ok(Math.abs(Number(JSON.parse(json).input_i) + 23) <= 0.5, `integrated loudness ${JSON.parse(json).input_i}`);
+    await assert.rejects(render([dir], { ...quiet, loudness: -3, out: join(dir, 'bad.mp4') }), /from -70 to -5 LUFS/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
