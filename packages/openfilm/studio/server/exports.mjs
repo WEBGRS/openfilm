@@ -75,7 +75,7 @@ import { NLE_FPS, nleFps, planNleTimeline, probeSource, soundStem, xmemlDocument
 import { draftsRoot, jianyingDraft } from './jianying.mjs';
 import { slidesPdf, writePptx } from './slides.mjs';
 import { subtitlesForExport } from './captions.mjs';
-import { burnFilm, even, frameBox, frameRatio } from '../../src/burn.mjs';
+import { burned, even, frameBox, frameRatio, stageOf } from '../../src/burn.mjs';
 export { frameBox, frameRatio };
 import { filmSubtitleCuesInRange, filmSubtitleShown, filmSubtitleSrt, filmSubtitleTranscript, filmSubtitleVtt } from './film-subtitle.mjs';
 import { zipFiles } from './zip.mjs';
@@ -474,17 +474,6 @@ function run(args, signal, input) {
   });
 }
 
-/** The film's stage, from film.html (or, for a single page, from the page). @param {string} root */
-async function stageOf(root) {
-  const file = join(root, FILM_FILE);
-  if (existsSync(file)) {
-    const { doc } = readFilmFile(readFileSync(file, 'utf8'));
-    if (doc) return doc.stage;
-  }
-  const probe = await open(root);
-  try { return { w: probe.film.meta.width, h: probe.film.meta.height }; } finally { await probe.close(); }
-}
-
 /** The project's film.html, read. @param {string} root */
 function filmDoc(root) {
   const file = join(root, FILM_FILE);
@@ -789,19 +778,8 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
     const { cues, style } = await captions(root);
     return { cues: filmSubtitleShown(cues, style).filter((c) => c.durMs > 0 && c.text.trim()), style };
   };
-  /**
-   * The film with its subtitles burned in, when the ask wants them and the film has some (else null): what to render
-   * instead of the project (see burnFilm).
-   * @param {string} root @param {Framing} ask @param {boolean} [transparent]
-   */
-  const burned = async (root, ask, transparent = false) => {
-    if (!ask.burnSubtitles) return null;
-    if (!(await subtitlesOf(root)).cues.length) return null;
-    /* the cues as stored: the page picks the shown language itself (filmSubtitleFrameHtml), and picking it twice
-       puts a bilingual line's translation under it twice */
-    const { cues, style } = await captions(root);
-    return burnFilm(root, await stageOf(root), ask.frame ?? 'native', ask.fill ?? 'contain', cues, style, transparent);
-  };
+  /** The film with its subtitles burned in, or null (burn.mjs). @param {string} root @param {Framing} ask @param {boolean} [transparent] */
+  const burnedOf = (root, ask, transparent = false) => burned(root, ask, captions, transparent);
 
   /**
    * render's frame count as the job's progress, its rate and what is left: `share` is the part of the whole job the
@@ -838,7 +816,7 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
     const codec = ask.codec ?? 'h264';
     const alpha = ALPHA_CODECS.has(codec);
     const clip = ask.clip ? await clipFilm(root, ask.clip) : null;
-    const burn = clip ? null : await burned(root, ask, alpha);
+    const burn = clip ? null : await burnedOf(root, ask, alpha);
     const scratch = codec === 'png' || codec === 'hevc_alpha' ? await mkdtemp(join(tmpdir(), 'openfilm-export-')) : null;
     try {
       const stage = clip?.stage ?? await stageOf(root);
@@ -936,7 +914,7 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
   async function exportGif(job, root, dir, signal) {
     const ask = /** @type {GifAsk} */ (job.ask);
     const scratch = await mkdtemp(join(tmpdir(), 'openfilm-export-'));
-    const burn = await burned(root, ask);
+    const burn = await burnedOf(root, ask);
     try {
       /* with subtitles, the frame is the page drawn */
       const stage = burn ? burn.box : await stageOf(root);
@@ -1012,7 +990,7 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
    * @param {string} scratch @param {AbortSignal} signal
    */
   async function stillFrames(job, root, ask, ext, scratch, signal) {
-    const burn = await burned(root, ask);
+    const burn = await burnedOf(root, ask);
     /* footage the browser does not decode (ProRes; HEVC without a chip for it) drawn through a copy it plays: the film's
        video clips, the project's when the film is drawn inside a frame with its subtitles */
     const probe = await open(burn ? burn.dir : root, burn ? { root, playable: filmVideos(root, FILM_FILE) } : { playable: true }).catch(async (e) => { await burn?.remove(); throw e; });

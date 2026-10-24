@@ -1,11 +1,13 @@
 /* The film with its subtitles burned in: a page drawn around the film, the subtitles over it (Studio's export and
    render --subtitles). */
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FILM_FILE } from './film-doc.mjs';
+import { FILM_FILE, readFilmFile } from './film-doc.mjs';
+import { open } from './shared.mjs';
+import { filmSubtitleShown } from '../studio/server/film-subtitle.mjs';
 
 const tidy = (path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
 export const even = (/** @type {number} */ n) => Math.max(2, Math.round(n / 2) * 2);
@@ -100,4 +102,30 @@ window.__filmSounds = () => inner?.__filmSounds?.() ?? [];
     throw e;
   }
   return { dir, box, remove: () => tidy(dir) };
+}
+
+/** The film's stage, from film.html (or, for a single page, from the page). @param {string} root */
+export async function stageOf(root) {
+  const file = join(root, FILM_FILE);
+  if (existsSync(file)) {
+    const { doc } = readFilmFile(readFileSync(file, 'utf8'));
+    if (doc) return doc.stage;
+  }
+  const probe = await open(root);
+  try { return { w: probe.film.meta.width, h: probe.film.meta.height }; } finally { await probe.close(); }
+}
+
+/**
+ * The film with its subtitles burned in, when the ask wants them and the film has some (else null): what to render
+ * instead of the project (see burnFilm). `captions(root)`: the film's cues and the person's style (captions.mjs).
+ * @param {string} root @param {{ burnSubtitles?: boolean, frame?: string, fill?: 'contain' | 'cover' }} ask
+ * @param {(root: string) => Promise<{ cues: Cue[], style: SubtitleStyle }>} captions @param {boolean} [transparent]
+ */
+export async function burned(root, ask, captions, transparent = false) {
+  if (!ask.burnSubtitles) return null;
+  /* the cues as stored: the page picks the shown language itself (filmSubtitleFrameHtml), and picking it twice
+     puts a bilingual line's translation under it twice */
+  const { cues, style } = await captions(root);
+  if (!filmSubtitleShown(cues, style).some((c) => c.durMs > 0 && c.text.trim())) return null;
+  return burnFilm(root, await stageOf(root), ask.frame ?? 'native', ask.fill ?? 'contain', cues, style, transparent);
 }
