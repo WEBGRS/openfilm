@@ -27,13 +27,17 @@ export async function call(service, url, init, ctx) {
   const text = await res.text().catch(() => '');
   if (outOfBalance(res.status, text)) throw noBalance(service);
   const reason = reasonOf(text).split(ctx.key).join('•••').slice(0, 500);
-  if (PAID_PLAN.test(text)) throw new Error(`${service} needs a paid plan for this, whatever the balance (${res.status})${reason ? `: ${reason}` : ''}`);
+  if (PAID_PLAN.test(text)) throw new Error(`${service} needs a paid plan for this (${res.status})${reason ? `: ${reason}` : ''}`);
   if (res.status === 401 || res.status === 403) throw new Error(`${service} did not accept your key (${res.status}). Check it in Studio: Settings (the OpenFilm logo at the top left) → Providers.`);
   throw new Error(`${service} answered ${res.status}${reason ? `: ${reason}` : ''}`);
 }
 
-/** What the account's plan does not include, balance or not: ElevenLabs' free plan and its music, or a voice from its library (a 402). */
-const PAID_PLAN = /paid_plan_required/i;
+/**
+ * What the account's plan does not include, balance or not: ElevenLabs' free plan and its music, or a voice from its
+ * library. Its documented codes are `subscription_required` and `feature_not_available` (403s); `paid_plan_required`
+ * comes as a 402.
+ */
+const PAID_PLAN = /paid_plan_required|subscription_required|feature_not_available/i;
 
 /**
  * Whether a service's error says its account has no balance left for this, as each says it: 402 Payment Required
