@@ -89,6 +89,21 @@ export async function keepAgentRecord({ agent, sessionId, cwd, turnId, from, to,
   }
 }
 
+/**
+ * The model that answered a Copilot turn from `from` (ms), as its own record names it, for a session that names none:
+ * read once its last usage record has had time to reach the file, as keepAgentRecord waits. Null for any other agent
+ * (at once, without waiting), or when none is found.
+ */
+export async function turnModel({ agent, sessionId, from, env = null, settleMs = RECORD_SETTLE_MS }) {
+  if (agent !== 'copilot' || !sessionId) return null;
+  try {
+    await new Promise((done) => setTimeout(done, settleMs));
+    return recordedModel({ agent, sessionId, from, env: env ?? await loginShellVariables({ staleOk: true }) });
+  } catch {
+    return null;
+  }
+}
+
 /** The page's pictures as ACP image blocks; anything not one is left out. */
 function imageBlocks(images) {
   if (!Array.isArray(images)) return [];
@@ -333,10 +348,10 @@ export function registerLocalAgentIpc(ipcMain, { trusted, binDir = null, fallbac
       entry.running -= 1;
       onWorking(working());
     }
-    /* an agent whose session names no model (GitHub Copilot, on some accounts): the one that answered, as its own
-       record says, for the turn's footer */
-    if (result.ok && !entry.info?.configOptions?.some((o) => o?.category === 'model')) {
-      const model = recordedModel({ agent: entry.agent, sessionId: entry.info?.sessionId, from, env: await loginShellVariables({ staleOk: true }) });
+    /* GitHub Copilot, its session naming no model (on some accounts): the one that answered, as its own record says,
+       for the turn's footer */
+    if (result.ok && entry.agent === 'copilot' && !entry.info?.configOptions?.some((o) => o?.category === 'model')) {
+      const model = await turnModel({ agent: entry.agent, sessionId: entry.info?.sessionId, from });
       if (model) result = { ...result, model };
     }
     entry.lastUsed = Date.now();
