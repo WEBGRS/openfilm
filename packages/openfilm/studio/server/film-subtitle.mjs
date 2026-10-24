@@ -643,7 +643,7 @@ export function parseFilmSubtitleStyle(raw) {
     })),
     language: isFilmSubtitleLanguage(v.language) ? v.language : null,
     bilingual: bool(v.bilingual, false),
-    fadeMs: num(v.fadeMs, base.fadeMs ?? 0, 0, 1000),
+    fadeMs: num(v.fadeMs, base.fadeMs, 0, 1000),
   };
 }
 
