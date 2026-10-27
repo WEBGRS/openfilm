@@ -38,6 +38,7 @@ import * as acp from '@agentclientprotocol/sdk';
 import { PATH_SEP, childEnvironment, lastPathSource, loginShellEnvironment, loginShellVariables, shellSubset } from './environment.mjs';
 import { AGENT_PROGRAMS, HOME_BIN_CANDIDATES, chosenProgram, codexAppCopies, codexVersion, desktopApp, detectAgentInstallation, installCommand, laterVersion, notTheAgent, searchReport } from './agent-installation.mjs';
 import { logSwitches } from './agent-logs.mjs';
+import { refreshWindowsApps } from './windows-apps.mjs';
 import { mergeConfig, sessionSkills } from './agent-skills.mjs';
 import { nodeBinary } from './node-runtime.mjs';
 import { outOfBalance } from './pi-config.mjs';
@@ -240,6 +241,9 @@ function windowsSlowSearch({ fresh = false } = {}) {
   return value;
 }
 
+/** The slower search and the apps Windows has registered, waited for three seconds at most: what comes later is there on the next look. */
+const windowsSlowerLook = () => Promise.race([Promise.all([windowsSlowSearch(), refreshWindowsApps()]), new Promise((done) => setTimeout(done, 3000).unref?.())]);
+
 /** Where this agent was looked for, beyond the PATH. */
 const searchDirs = () => [...HOME_BIN_CANDIDATES(), ...(slowFound.npmPrefix ? [slowFound.npmPrefix] : [])];
 
@@ -336,7 +340,7 @@ export async function diagnoseAgent(id, { appVersion = '' } = {}) {
   const spec = AGENTS[id];
   if (!spec) return null;
   const shell = await loginShellEnvironment({ maxAgeMs: 0 });
-  const slow = await windowsSlowSearch({ fresh: true });
+  const [slow] = await Promise.all([windowsSlowSearch({ fresh: true }), refreshWindowsApps({ maxAge: 0 })]);
   const pathDirs = shell.PATH.split(PATH_SEP);
   const found = resolveAgentCli(id, { pathDirs });
   const names = AGENT_PROGRAMS[id]?.names ?? [id];
@@ -696,7 +700,7 @@ export async function listAgents({ ids = Object.keys(AGENTS), statusIds = ids, f
     // Enabled agents start first. Background discovery never opens a disabled agent's ACP/auth session.
     if (!checkSignIn) await new Promise((done) => setImmediate(done));
     if (windows && !resolveAgentCli(id, { pathDirs })) {
-      await Promise.race([windowsSlowSearch(), new Promise((done) => setTimeout(done, 3000).unref?.())]);
+      await windowsSlowerLook();
     }
     const agent = await agentOnComputer(id, pathDirs, { fresh, checkSignIn });
     onAgent(agent);
@@ -709,7 +713,7 @@ export async function localAgent(id, { fresh = false } = {}) {
   if (!isAgentId(id)) throw new Error(`No agent ${id}`);
   const pathDirs = (await loginShellEnvironment({ maxAgeMs: 10_000 })).PATH.split(PATH_SEP);
   if (windows && !resolveAgentCli(id, { pathDirs })) {
-    await Promise.race([windowsSlowSearch(), new Promise((done) => setTimeout(done, 3000).unref?.())]);
+    await windowsSlowerLook();
   }
   return agentOnComputer(id, pathDirs, { fresh });
 }
