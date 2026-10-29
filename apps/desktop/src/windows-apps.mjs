@@ -69,7 +69,11 @@ export function windowsAppsReader({ query = queryKey, platform = process.platfor
     void refresh();
     return read.apps;
   };
-  return { installed, refresh };
+  /* the first reading, waited for however long it takes; at once after that, however old the last one is */
+  const first = () => refresh({ maxAge: Infinity });
+  /* off Windows there is nothing to read */
+  const wasRead = () => platform !== 'win32' || read.at > -Infinity;
+  return { installed, refresh, first, wasRead };
 }
 
 const reader = windowsAppsReader();
@@ -77,3 +81,18 @@ const reader = windowsAppsReader();
 export const installedWindowsApps = () => reader.installed();
 /** Read again unless read within `maxAge` ms, and wait for it. */
 export const refreshWindowsApps = (options) => reader.refresh(options);
+/** The first reading, waited for; started at launch (main.mjs), it is often in before anything asks. */
+export const firstWindowsApps = () => reader.first();
+
+/**
+ * `find()`, and once more when the first reading comes in if it found nothing before it. Until then a program known
+ * only from its registration (DeepSeek Harness on D:\) is not found: a conversation reopened right after launch would
+ * say it is not installed.
+ * @template T @param {() => T} find @param {{ reader?: ReturnType<typeof windowsAppsReader> }} [o] @returns {Promise<T>}
+ */
+export async function afterFirstReading(find, { reader: apps = reader } = {}) {
+  const found = find();
+  if (found || apps.wasRead()) return found;
+  await apps.first();
+  return find();
+}

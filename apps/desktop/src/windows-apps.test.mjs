@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseWindowsApps, windowsAppsReader } from './windows-apps.mjs';
+import { afterFirstReading, parseWindowsApps, windowsAppsReader } from './windows-apps.mjs';
 
 test('Windows app registrations retain custom folders, quoted paths, spaces and non-ASCII names', () => {
   const apps = parseWindowsApps(String.raw`
@@ -92,4 +92,46 @@ test('only Windows has the registrations read', async () => {
   assert.deepEqual(reader.installed(), []);
   assert.deepEqual(await reader.refresh(), []);
   assert.equal(asked, 0);
+});
+
+test('the first reading is waited for however long it takes, and only that one', async () => {
+  let clock = 0;
+  const registry = slowRegistry([REGISTERED('DeepSeek Harness', String.raw`D:\Apps\DeepSeek Harness`)]);
+  const reader = windowsAppsReader({ query: registry.query, platform: 'win32', env: {}, now: () => clock });
+  assert.equal(reader.wasRead(), false);
+  let done = false;
+  const first = reader.first().then((apps) => { done = true; return apps; });
+  await new Promise((settle) => setTimeout(settle, 20));
+  assert.equal(done, false, 'still reading: waited for, with no cap');
+  registry.answer();
+  assert.equal((await first).length, 3);
+  assert.equal(reader.wasRead(), true);
+  clock = 60_000;
+  const calls = registry.calls.length;
+  assert.equal((await reader.first()).length, 3, 'read a minute ago: answered at once');
+  assert.equal(registry.calls.length, calls, 'and not read again');
+});
+
+test('a program not found before the first reading is looked for again once it is in', async () => {
+  const registry = slowRegistry([REGISTERED('DeepSeek Harness', String.raw`D:\Apps\DeepSeek Harness`)]);
+  const reader = windowsAppsReader({ query: registry.query, platform: 'win32', env: {} });
+  let looks = 0;
+  const find = () => { looks += 1; return reader.installed().find((app) => app.name === 'DeepSeek Harness') ?? null; };
+  const found = afterFirstReading(find, { reader });
+  registry.answer();
+  assert.equal((await found)?.name, 'DeepSeek Harness');
+  assert.equal(looks, 2, 'before the reading, and after it');
+  looks = 0;
+  assert.equal((await afterFirstReading(find, { reader }))?.name, 'DeepSeek Harness');
+  assert.equal(looks, 1, 'found: looked once');
+  looks = 0;
+  assert.equal(await afterFirstReading(() => { looks += 1; return null; }, { reader }), null);
+  assert.equal(looks, 1, 'read already: not found is not found');
+});
+
+test('off Windows a program is looked for once', async () => {
+  const reader = windowsAppsReader({ query: async () => '', platform: 'darwin' });
+  let looks = 0;
+  assert.equal(await afterFirstReading(() => { looks += 1; return null; }, { reader }), null);
+  assert.equal(looks, 1);
 });
