@@ -35,6 +35,7 @@ import { $createPromptReferenceNode } from './PromptReferenceNode';
 import {
   buildMentionMenu,
   matchMentionTrigger,
+  MENTION_MENU_LIMIT,
   type MentionEntry,
   type MentionProvider,
   type MentionTrigger,
@@ -54,6 +55,8 @@ export interface MentionMenuConfig {
   onOpen?: () => void;
   /** When typing opens it: an `@` (the default), or a `/` at the start (the agent's commands, matchSlashTrigger). */
   trigger?: (textBeforeCursor: string) => MentionTrigger | null;
+  /** The most rows it shows (MENTION_MENU_LIMIT); the agent's commands show them all. */
+  limit?: number;
 }
 
 /** Lexical requires options to subclass MenuOption (it attaches a ref for scrolling). */
@@ -66,13 +69,13 @@ class MentionMenuOption extends MenuOption {
   }
 }
 
-export function MentionMenuPlugin({ providers, label, onOpen, trigger: match = matchMentionTrigger }: MentionMenuConfig) {
+export function MentionMenuPlugin({ providers, label, onOpen, trigger: match = matchMentionTrigger, limit = MENTION_MENU_LIMIT }: MentionMenuConfig) {
   const [editor] = useLexicalComposerContext();
   const [query, setQuery] = React.useState('');
 
   const options = React.useMemo(
-    () => buildMentionMenu(providers, query).map((entry) => new MentionMenuOption(entry)),
-    [providers, query],
+    () => buildMentionMenu(providers, query, limit).map((entry) => new MentionMenuOption(entry)),
+    [providers, query, limit],
   );
 
   /* These callbacks must be stable. The host re-renders often (20 times a second during
@@ -286,6 +289,16 @@ function MentionMenu({
       window.removeEventListener('blur', blur);
     };
   }, [editorRoot]);
+
+  /* The arrow keys' row kept in view. Lexical scrolls only a menu inside its own anchor (`#typeahead-menu`), and this
+     one is in the chat layer, so past the rows that fit, the selection went on below the menu's edge. */
+  React.useEffect(() => {
+    if (selectedIndex == null) return;
+    const row = options[selectedIndex]?.ref?.current;
+    /* back at the first row: its group's title too */
+    if (selectedIndex === 0) row?.parentElement?.scrollTo({ top: 0 });
+    else row?.scrollIntoView({ block: 'nearest' });
+  }, [selectedIndex, options]);
 
   if (!style) return null;
   return (

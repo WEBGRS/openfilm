@@ -404,6 +404,8 @@ function ChatPane({ project, banners, selection, assetsOpen }: { project: Projec
   const agentCommands = useAgentCommands(agent);
   const commandMenu = React.useMemo(() => (agentCommands.length || nameableSkills.length ? {
     label: t('composer.commands'),
+    /* every one, scrolled: Codex lists its built-in commands and each of the person's skills, 150 on one computer */
+    limit: Infinity,
     providers: [...(nameableSkills.length ? [{
       id: 'skills',
       groupLabel: t('skills.button'),
