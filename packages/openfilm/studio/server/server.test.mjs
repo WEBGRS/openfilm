@@ -623,18 +623,23 @@ test('a project whose folder is gone says so, never takes Studio down, and can b
   assert.ok(!(await (await api('/api/projects')).json()).projects.some((p) => p.id === project.id));
 });
 
-test('a removed film is unavailable before opening or editing; remaining files are preserved on removal', async () => {
+test('a removed film keeps the project open but says so; nothing writes the film until it is back; remaining files are preserved on removal', async () => {
   const { project } = await (await api('/api/projects', { method: 'POST', body: { path: join(scratch, 'Film removed externally') } })).json();
   rmSync(join(project.path, 'film.html'));
   writeFileSync(join(project.path, 'keep.txt'), 'remaining work');
+  /* the project itself opens (its page says film.html is missing), and so does its stream, which says so at once */
+  const opened = await api(`/api/projects/${project.id}`);
+  assert.equal(opened.status, 200);
+  assert.equal((await opened.json()).filmMissing, true);
+  assert.equal((await api(`/api/projects/${project.id}/opened`, { method: 'POST' })).status, 200);
+  const told = await collect(`/api/projects/${project.id}/events`, (events) => events.some((e) => e.type === 'film-missing'));
+  assert.ok(told.some((e) => e.type === 'film-missing') && !told.some((e) => e.type === 'gone'));
   for (const [rest, options] of [
-    ['', {}],
-    ['/opened', { method: 'POST' }],
     ['/files', {}],
     ['/edit', { method: 'POST', body: { ops: [{ op: 'insert', clip: { src: 'title.html' } }] } }],
   ]) {
     const response = await api(`/api/projects/${project.id}${rest}`, options);
-    assert.equal(response.status, 410, rest || 'opening the project');
+    assert.equal(response.status, 410, rest);
     assert.equal((await response.json()).code, 'missing-film');
   }
   assert.ok(!existsSync(join(project.path, 'film.html')), 'opening or editing never recreates the removed film');
@@ -644,6 +649,42 @@ test('a removed film is unavailable before opening or editing; remaining files a
   assert.equal((await api(`/api/projects/${project.id}`, { method: 'DELETE' })).status, 200);
   assert.equal(readFileSync(join(project.path, 'keep.txt'), 'utf8'), 'remaining work');
   assert.equal((await api('/api/health')).status, 200);
+});
+
+test('without film.html the history still lists, restores and discards: a version that has it brings back film.html alone (#304)', async () => {
+  const { project } = await (await api('/api/projects', { method: 'POST', body: { path: join(scratch, 'Film lost') } })).json();
+  const history = (path = '', body) => api(`/api/projects/${project.id}/history${path}`, body ? { method: 'POST', body } : {});
+  const kept = filmHtml({ stage: { w: 640, h: 360 }, tracks: [] });
+  writeFileSync(join(project.path, 'film.html'), kept);
+  const { commit } = await (await history('/save', { message: 'Kept' })).json();
+  rmSync(join(project.path, 'film.html'));
+  const listed = await history();
+  assert.equal(listed.status, 200);
+  const { status, versions } = await listed.json();
+  assert.equal(status.filmMissing, true);
+  assert.deepEqual(versions.map((v) => v.commit), [commit]);
+  assert.equal((await history(`/versions/${commit}`)).status, 200);
+  /* nothing to save: an empty version is never made */
+  const empty = await history('/save', { message: 'Empty' });
+  assert.equal(empty.status, 409);
+  assert.equal((await empty.json()).code, 'missing-film');
+  assert.deepEqual((await (await history()).json()).versions.map((v) => v.commit), [commit]);
+  /* restored: only film.html comes back as the version had it; the agent's other work stays as it is */
+  writeFileSync(join(project.path, 'notes.md'), 'the agent\'s notes');
+  const restored = await history('/film', { commit });
+  assert.equal(restored.status, 200);
+  assert.equal(readFileSync(join(project.path, 'film.html'), 'utf8'), kept);
+  assert.equal(readFileSync(join(project.path, 'notes.md'), 'utf8'), 'the agent\'s notes');
+  assert.equal((await (await history()).json()).status.filmMissing, undefined);
+  /* back meanwhile: the whole version is the way, not this */
+  assert.equal((await (await history('/film', { commit })).json()).code, 'dirty');
+  /* a whole version checked out, or the changes discarded, bring it back too */
+  rmSync(join(project.path, 'film.html'));
+  assert.equal((await history('/checkout', { commit, discard: true })).status, 200);
+  assert.equal(readFileSync(join(project.path, 'film.html'), 'utf8'), kept);
+  rmSync(join(project.path, 'film.html'));
+  assert.equal((await history('/discard', {})).status, 200);
+  assert.equal(readFileSync(join(project.path, 'film.html'), 'utf8'), kept);
 });
 
 test('a page gone mid-request (its connection reset) ends only its own stream, never Studio', async () => {
