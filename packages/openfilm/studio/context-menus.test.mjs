@@ -62,10 +62,14 @@ test('a click only selects; a right click gives the whole menu, Reference first,
     const clipMenu = await menu();
     assert.deepEqual(clipMenu.slice(0, 2), [`refer|Reference in chat${REFER_KEYS}`, '-']);
     for (const id of ['duplicate', 'speed', 'mute', 'copy-attrs']) assert.ok(clipMenu.some((row) => row.startsWith(`${id}|`)), id);
-    /* Speed is checked while on, and the timeline's toolbar has it too */
+    /* Speed is checked while on, and the clip's edges say so; it is in the menu only, not in the timeline's toolbar */
+    assert.equal(await page.locator('[data-timeline] button[aria-label^="Speed"]').count(), 0);
     await page.getByRole('menuitem', { name: /^Speed/ }).click();
     await until(() => page.locator('[data-timeline][data-speed-mode]').count(), 'Speed turns the edges into speed handles');
-    assert.equal(await page.locator('[data-timeline-speed="1"] [aria-pressed="true"]').count(), 1);
+    assert.ok(await video.locator('[data-speed-handle]').count() > 0, 'the clip\'s edges change its speed');
+    /* said by the frame's color alone: no bars or dots on its edges */
+    assert.equal(await video.locator('[data-block-frame="speed"]').count(), 1);
+    assert.equal(await video.locator('[data-speed-handle] *, [data-trim] *, [data-fade-handle]').count(), 0, 'nothing drawn on its edges');
     await video.click({ button: 'right', position: { x: 20, y: 10 } });
     await until(async () => (await menu())?.some((row) => row.startsWith('speed|✓')), 'Speed is checked in the menu');
     await page.getByRole('menuitem', { name: /^Copy attributes/ }).click();
